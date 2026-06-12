@@ -14,3 +14,14 @@ This repo includes the Juypyter notebook exercises and LLM finetuning demo scrip
 - **run_train_8gpus.sh** – SLURM script for training with 8 GPUs  
 - **run_create_predictions.sh** – SLURM script for inference with 4 GPUs  
 
+
+-----
+
+**Authors of the original repository:**
+- Henri Meriläinen
+- Emma Hintsala
+
+**Acknowledgements**
+
+Fine-tuning code is based on [CSCfi/llm-fine-tuning-examples](https://github.com/CSCfi/llm-fine-tuning-examples).
+

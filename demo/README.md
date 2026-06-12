@@ -24,13 +24,14 @@ Creates the training dataset of (dialogue → structured note) pairs using a lar
 ```bash
 sbatch run_data_mod_vllm.sh openai/gpt-oss-120b structured_notes.json 256
 ```
-Arguments:
+Script arguments explained:
 * openai/gpt-oss-120b - LLM used to augment the dataset
 * structured_notes.json - JSON file name (used in finetuning codes)
 * 256 - batch size (how many queries sent to vLLM server at once)
 
 ### 2. Fine-tuning
 Fine-tunes MedGemma-1.5-4B using PEFT on 8 GPUs.
+
 ```bash
 sbatch run_finetune_8gpus.sh
 ```
