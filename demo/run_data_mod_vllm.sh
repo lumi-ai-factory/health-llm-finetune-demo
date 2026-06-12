@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --account=project_xxx
+#SBATCH --account=project_462001520
 #SBATCH --partition=small-g
 #SBATCH --ntasks=1
 #SBATCH --output=./log/data_mod/%j/output.log

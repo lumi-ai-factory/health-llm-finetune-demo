@@ -78,7 +78,7 @@ srun singularity run $SIF   ./venv/bin/python -m torch.distributed.run \
     --rdzv_id=$SLURM_JOB_ID \
     --rdzv_backend=c10d \
     --rdzv_endpoint="$MASTER_ADDR:$MASTER_PORT" \
-    train.py $* \
+    finetune.py $* \
     --input-model "$MODEL_NAME" \
     --output-path $OUTPUT_DIR \
     --val-json-output $VAL_JSON_PATH \
