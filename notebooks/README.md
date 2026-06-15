@@ -6,7 +6,7 @@ The notebooks are designed for interactive use via Jupyter on LUMI.
 - **1_finetuning.ipynb** – Fine-tuning workflow using a single GPU (Jupyter)
 - **2_test_ft_qwen.ipynb** – Generating predictions (inference)
 - **3_test_ft_medgemma.ipynb** – Testing the fine-tuned model
-4_inspect_demo_predictions.ipynb
+- **4_inspect_demo_prediction.ipynb** – Dispaly model responses generated in the [demo](../demo/README.md)
 
 
 ### 1. Launch Jupyter
@@ -30,6 +30,20 @@ This setup is suitable for:
 - Running fine-tuning experiments on a small scale  
 - Performing inference interactively  
 
+
+### 3. Open Jupyter App terminal 
+
+Paste these command one by one to the terminal.
+
+1. Create a personal folder:
+````
+mkdir /scratch/$SLURM_JOB_ACCOUNT/$USER
+````
+
+2. Copy the exercise notebooks into your folder:
+````
+cp -r /scratch/$SLURM_JOB_ACCOUNT/notebooks /scratch/$SLURM_JOB_ACCOUNT/$USER 
+````
 
 -----
 

@@ -1,26 +1,28 @@
 # Health LLM Finetuning Demo
 ![demo_overview](../images/demo_overview.png)
 
-This demo fine-tunes MedGemma-1.5-4B on doctor–patient conversations to generate structured clinical notes.
+This demo fine-tunes [MedGemma-1.5-4B](google/medgemma-1.5-4b-it) on doctor–patient conversations to generate structured clinical notes.
+
 It covers four steps: data preprocessing, fine-tuning, inference, and evaluation.
 
 ## Files
 
 | File | Description |
 |---|---|
-| `data_mod.py` | Data preprocessing script |
-| `finetune.py` | Fine-tuning script (MedGemma-1.5--4B, 8 GPUs, PEFT) |
 | `create_predictions.py` | Runs inference and saves predictions to JSON |
 | `calculate_metrics.py` | Computes BLEU, ROUGE-L, and BERTScore |
-| `run_finetune_8gpus.sh` | SLURM script for fine-tuning |
+| `data_mod.py` | Data preprocessing script |
+| `finetune.py` | Fine-tuning script (MedGemma-1.5-4B, 8 GPUs, PEFT) |
 | `run_create_predictions.sh` | SLURM script for inference |
 | `run_calculate_metrics.sh` | SLURM script for evaluation |
 | `run_data_mod_vllm.sh` | SLURM script for data preprocessing |
+| `run_finetune_8gpus.sh` | SLURM script for fine-tuning |
 
 ## Steps
 
 ### 1. Data preprocessing
-Creates the training dataset of (dialogue → structured note) pairs using a large LLM to augment the data.
+Creates the training dataset of (dialogue → structured note) pairs using a large LLM to augment the data. Created structured note is created based on the `full_note` column of the [original dataset](https://huggingface.co/datasets/AGBonnet/augmented-clinical-notes).
+
 ```bash
 sbatch run_data_mod_vllm.sh openai/gpt-oss-120b structured_notes.json 256
 ```
@@ -37,7 +39,7 @@ sbatch run_finetune_8gpus.sh
 ```
 
 ### 3. Inference
-Generates predictions on the validation set (3,000 samples) for three models: MedGemma-4B base, MedGemma-4B fine-tuned, and MedGemma-27B base. Results are saved to a JSON file.
+Generates predictions on the validation set (3,000 samples) for three models: MedGemma-1.5-4B original, MedGemma-1.5-4B fine-tuned, and MedGemma-27B original. Results are saved to a JSON file.
 
 ```bash
 sbatch run_create_predictions.sh
