@@ -49,3 +49,12 @@ Computes BLEU, ROUGE-L, and BERTScore against reference answers using the predic
 ```bash
 sbatch run_calculate_metrics.sh
 ```
+-----
+
+**Authors:**
+- Henri Meriläinen
+- Emma Hintsala
+
+**Acknowledgements**
+
+Fine-tuning code is based on [CSCfi/llm-fine-tuning-examples](https://github.com/CSCfi/llm-fine-tuning-examples).
