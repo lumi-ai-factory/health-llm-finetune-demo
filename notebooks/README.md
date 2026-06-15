@@ -4,9 +4,8 @@ The notebooks are designed for interactive use via Jupyter on LUMI.
 
 ### Notebooks
 - **1_finetuning.ipynb** – Fine-tuning workflow using a single GPU (Jupyter)
-- **2_test_ft_qwen.ipynb** – Generating predictions (inference)
-- **3_test_ft_medgemma.ipynb** – Testing the fine-tuned model
-- **4_inspect_demo_prediction.ipynb** – Dispaly model responses generated in the [demo](../demo/README.md)
+- **2_test_ft_qwen.ipynb** –  Testing the fine-tuned model with one-time inference
+- **3_inspect_demo_prediction.ipynb** – Dispaly model responses generated in the [demo](../demo/README.md)
 
 
 ### 1. Launch Jupyter
