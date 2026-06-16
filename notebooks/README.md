@@ -22,7 +22,7 @@ Use the following settings:
 - **Memory**: `60 GiB`  
 - **GPUs (MI250)**: `1`  
 - **Time**: `02:00:00`  
-- **Working directory**: `/scratch/project_462001520`  
+- **Working directory**: `/scratch/$PROJECT`  
 - **Module**: `lumi-multitorch`  
 
 This setup is suitable for:
