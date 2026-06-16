@@ -23,7 +23,7 @@ Use the following settings:
 - **GPUs (MI250)**: `1`  
 - **Time**: `02:00:00`  
 - **Working directory**: `/scratch/$PROJECT`  
-- **Module**: `lumi-multitorch`  
+- **Module**: `lumi-multitorch`  (see more info [here](https://lumi-supercomputer.github.io/LUMI-training-materials/User-Coffee-Breaks/20260326-user-coffee-break-LAIF-software-environment/) and [here](https://docs.lumi-supercomputer.eu/laif/software/ai-environment/))
 
 This setup is suitable for:
 - Running fine-tuning experiments on a small scale  
