@@ -1,10 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=eval_metrics_structured_notes
 #SBATCH --account=project_462000131
-#SBATCH --partition=small
-#SBATCH --time=3:30:00
+#SBATCH --partition=dev-g
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=64
+#SBATCH --gpus-per-node=1
+#SBATCH --cpus-per-task=7
+#SBATCH --mem=60G
+#SBATCH --time=1:00:00
 #SBATCH --output=./log/metrics/%j_output.log
 #SBATCH --error=./log/metrics/%j_error.log
 
