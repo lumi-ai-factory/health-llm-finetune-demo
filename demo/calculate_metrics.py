@@ -14,8 +14,12 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # USER CONFIGURATION
 # ---------------------------------------------------------------------------
-PREDICTIONS_DIR = "/scratch/project_462001520/data"
-OUTPUT_DIR      = "/scratch/project_462001520/demo/metrics"
+# All data files live under the user's data directory
+PROJECT         = os.environ.get("SLURM_JOB_ACCOUNT")
+USER            = os.environ.get("USER")
+DATA_ROOT       = f"/scratch/{PROJECT}/{USER}/data"
+PREDICTIONS_DIR = f"{DATA_ROOT}/predictions"
+OUTPUT_DIR      = f"{DATA_ROOT}/metrics"
 
 BERTSCORE_LANG  = "en"   # change to "fi" if evaluating Finnish text
 
@@ -238,21 +242,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Evaluate 4B-base, 4B-finetuned, and 27B-base structured-note predictions."
     )
-    parser.add_argument("--predictions-dir", default=PREDICTIONS_DIR)
-    parser.add_argument("--output-dir",      default=OUTPUT_DIR)
-    parser.add_argument("--skip-bertscore",  action="store_true")
-    parser.add_argument("--skip-bleu",       action="store_true")
+    parser.add_argument("--predictions-dir",  default=PREDICTIONS_DIR)
+    parser.add_argument("--predictions-file", default=None,
+                        help="Specific predictions file to evaluate. "
+                             "Default: the newest predictions*.json in --predictions-dir")
+    parser.add_argument("--output-dir",       default=OUTPUT_DIR)
+    parser.add_argument("--skip-bertscore",   action="store_true")
+    parser.add_argument("--skip-bleu",        action="store_true")
     args = parser.parse_args()
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    # Find the most recent predictions file
-    pred_files = glob.glob(os.path.join(args.predictions_dir, "predictions*.json"))
-    if not pred_files:
-        raise FileNotFoundError(
-            f"No predictions*.json found in: {args.predictions_dir}"
-        )
-    pred_file = max(pred_files, key=os.path.getmtime)
+    if args.predictions_file:
+        pred_file = args.predictions_file
+    else:
+        # Find the most recent predictions file
+        pred_files = glob.glob(os.path.join(args.predictions_dir, "predictions*.json"))
+        if not pred_files:
+            raise FileNotFoundError(
+                f"No predictions*.json found in: {args.predictions_dir}"
+            )
+        pred_file = max(pred_files, key=os.path.getmtime)
     print(f"\nUsing predictions file: {pred_file}")
 
     base_4b_preds, ft_preds, base_27b_preds, references = load_predictions(pred_file)
