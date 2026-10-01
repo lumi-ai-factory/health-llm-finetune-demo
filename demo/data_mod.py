@@ -4,17 +4,31 @@ from datasets import load_dataset
 from tqdm import tqdm
 
 import argparse
+import json
 import os
 import asyncio
 import time
+from datetime import datetime
+
+import numpy as np
 import pandas as pd
 
 load_dotenv()
 
 project_id = os.getenv("SLURM_JOB_ACCOUNT", "project_462000131")
+user = os.getenv("USER")
 
 DATASET_NAME="AGBonnet/augmented-clinical-notes"
-DATASET_CACHE_DIR=f"/scratch/{project_id}/data/"
+
+# All data files of the pipeline (source dataset cache, generated splits,
+# models, predictions, metrics) live under this per-user directory.
+DATA_ROOT=f"/scratch/{project_id}/{user}/data"
+DATASET_CACHE_DIR=f"{DATA_ROOT}/"
+
+# Columns written to train/validation/test. Only "conversation" and
+# "structured_note" are needed for training and evaluation; "idx" identifies
+# the source row and "full_note" is kept as reference.
+SPLIT_COLUMNS = ["idx", "conversation", "structured_note", "full_note"]
 
 dataset = load_dataset(DATASET_NAME, cache_dir=DATASET_CACHE_DIR)
 
@@ -158,6 +172,34 @@ async def main(batch_size, model):
 
     return all_results
 
+# ---------------------------------------------------------------------------
+# Saving and splitting
+# ---------------------------------------------------------------------------
+
+def save_jsonl(frame: pd.DataFrame, path: str) -> None:
+    """One JSON object per line (JSON Lines)."""
+    frame.to_json(path, orient="records", lines=True, force_ascii=False)
+
+
+def split_dataframe(frame: pd.DataFrame, val_size: float, test_size: float, seed: int) -> dict:
+    """Random train/validation/test split, reproducible with the seed."""
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(frame))
+
+    n_test = int(round(len(frame) * test_size))
+    n_val = int(round(len(frame) * val_size))
+
+    test_rows = np.sort(perm[:n_test])
+    val_rows = np.sort(perm[n_test:n_test + n_val])
+    train_rows = np.sort(perm[n_test + n_val:])
+
+    return {
+        "train": frame.iloc[train_rows].reset_index(drop=True),
+        "validation": frame.iloc[val_rows].reset_index(drop=True),
+        "test": frame.iloc[test_rows].reset_index(drop=True),
+    }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
 
@@ -167,11 +209,28 @@ if __name__ == "__main__":
 
     parser.add_argument("--backend", type=str, default=None, help="Whether to use LLM hosted by own vllm server")
 
-    parser.add_argument("--json_name", type=str, help="Name of the output JSON file to save results")
+    parser.add_argument("--out_name", type=str, default="structured_notes",
+                        help=f"Name of the output directory under {DATA_ROOT}")
+
+    parser.add_argument("--val_size", type=float, default=0.1, help="Fraction of rows for the validation split")
+
+    parser.add_argument("--test_size", type=float, default=0.1, help="Fraction of rows for the test split")
+
+    parser.add_argument("--seed", type=int, default=42, help="Random seed for the split")
+
+    parser.add_argument("--max_rows", type=int, default=None,
+                        help="Process only the first N rows (for testing)")
 
     parser.add_argument("--api-url")
 
     args, _ = parser.parse_known_args()
+
+    if args.max_rows:
+        df = df.head(args.max_rows)
+        print(f"Test run: using only the first {len(df)} rows")
+
+    if not 0 <= args.val_size + args.test_size < 1:
+        raise ValueError("val_size + test_size must be between 0 and 1")
 
     if args.backend == "vllm":
         openai_client = AsyncOpenAI(
@@ -192,6 +251,50 @@ if __name__ == "__main__":
 
     df_results = pd.DataFrame(results)
 
-    df.to_json(path_or_buf=os.path.join(DATASET_CACHE_DIR, args.json_name))
+    out_dir = os.path.join(DATA_ROOT, args.out_name)
+    os.makedirs(out_dir, exist_ok=True)
 
-    # df_results.to_csv(os.path.join(DATASET_CACHE_DIR, "health_case_dataset.csv"))
+    # ── 1) Save all rows first, so the expensive LLM run is never lost ─────
+    # text_for_llm is left out: it repeats the same system prompt on every
+    # row. The prompt is stored once in dataset_info.json instead.
+    full_path = os.path.join(out_dir, "structured_notes_full.jsonl")
+    save_jsonl(df.drop(columns=["text_for_llm"]), full_path)
+    print(f"\nSaved all {len(df)} rows -> {full_path}")
+
+    # ── 2) Drop failed LLM calls (empty structured_note) ───────────────────
+    empty = df["structured_note"].fillna("").str.strip() == ""
+    n_empty = int(empty.sum())
+
+    keep_cols = [c for c in SPLIT_COLUMNS if c in df.columns]
+    for required in ("conversation", "structured_note"):
+        if required not in keep_cols:
+            raise KeyError(f"Required column '{required}' missing. Columns: {list(df.columns)}")
+
+    df_clean = df.loc[~empty, keep_cols].reset_index(drop=True)
+
+    # ── 3) Split ───────────────────────────────────────────────────────────
+    splits = split_dataframe(df_clean, args.val_size, args.test_size, args.seed)
+
+    # ── 4) Save splits ─────────────────────────────────────────────────────
+    for name, split_df in splits.items():
+        save_jsonl(split_df, os.path.join(out_dir, f"{name}.jsonl"))
+
+    # ── 5) Save and print dataset information ──────────────────────────────
+    info = {
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "source_dataset": DATASET_NAME,
+        "llm_model": args.model,
+        "seed": args.seed,
+        "columns": keep_cols,
+        "rows_total": len(df),
+        "rows_dropped_empty": n_empty,
+        "splits": {name: len(split_df) for name, split_df in splits.items()},
+    }
+
+    info_path = os.path.join(out_dir, "dataset_info.json")
+    with open(info_path, "w", encoding="utf-8") as f:
+        json.dump(info, f, indent=2)
+
+    print("\nDataset info:")
+    print(json.dumps(info, indent=2))
+    print(f"Saved -> {info_path}")
