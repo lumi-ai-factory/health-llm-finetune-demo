@@ -1,7 +1,7 @@
 # Health LLM Finetuning Demo
 ![demo_overview](../images/demo_overview.png)
 
-This demo fine-tunes [MedGemma-1.5-4B](google/medgemma-1.5-4b-it) on doctor–patient conversations to generate structured clinical notes.
+This demo fine-tunes [MedGemma-1.5-4B](https://huggingface.co/google/medgemma-1.5-4b-it) on doctor–patient conversations to generate structured clinical notes.
 
 It covers four steps: data preprocessing, fine-tuning, inference, and evaluation.
 
@@ -9,30 +9,62 @@ It covers four steps: data preprocessing, fine-tuning, inference, and evaluation
 
 | File | Description |
 |---|---|
-| `create_predictions.py` | Runs inference and saves predictions to JSON |
-| `calculate_metrics.py` | Computes BLEU, ROUGE-L, and BERTScore |
-| `data_mod.py` | Data preprocessing script |
+| `data_mod.py` | Data preprocessing: creates structured notes and the train/validation/test splits|
 | `finetune.py` | Fine-tuning script (MedGemma-1.5-4B, 8 GPUs, PEFT) |
-| `run_create_predictions.sh` | SLURM script for inference |
-| `run_calculate_metrics.sh` | SLURM script for evaluation |
+| `create_predictions.py` | Runs inference on the test split and saves predictions to JSON |
+| `calculate_metrics.py` | Computes BLEU, ROUGE-L, and BERTScore |
 | `run_data_mod_vllm.sh` | SLURM script for data preprocessing |
 | `run_finetune_8gpus.sh` | SLURM script for fine-tuning |
+| `run_create_predictions.sh` | SLURM script for inference |
+| `run_calculate_metrics.sh` | SLURM script for evaluation |
+
+## Before you start
+
+1. **Project:** the SLURM scripts use `#SBATCH --account=project_462000131`. If you use another project, change this line in all four SLURM scripts. All paths are derived from it, so nothing else needs to change.
+2. **MedGemma access:** accept the model terms on Hugging Face for [MedGemma-1.5-4B](https://huggingface.co/google/medgemma-1.5-4b-it) and [MedGemma-27B](https://huggingface.co/google/medgemma-27b-it), and save your Hugging Face token to `~/.cache/huggingface/token`.
+
+## Where the files are saved
+
+All data files of the pipeline are saved under your own directory in the project's scratch:
+
+```
+/scratch/<project>/<user>/data/
+├── <Hugging Face cache of the original dataset>
+├── structured_notes/                  ← step 1
+│   ├── structured_notes_full.jsonl    all rows with the generated structured notes
+│   ├── train.jsonl                    80 %, used for training
+│   ├── validation.jsonl               10 %, used for eval_loss during training
+│   ├── test.jsonl                     10 %, used only for the final comparison
+│   └── dataset_info.json              split sizes, columns, seed, source and LLM model
+├── models/                            ← step 2: LoRA model and merged model
+├── mlruns/                            ← step 2: MLflow tracking data
+├── predictions/                       ← step 3: predictions_<jobid>.json, manifest_<runid>.json
+└── metrics/                           ← step 4: metrics_<jobid>.json and plots
+```
+
+The datasets are saved as [JSON Lines](https://jsonlines.org/): one example per line. You can inspect them directly, e.g. `head -n 1 test.jsonl` or `wc -l *.jsonl`.
+
+Downloaded models are stored in a shared cache for the whole project, `/scratch/<project>/hf-cache`, so each model is downloaded only once.
 
 ## Steps
 
 ### 1. Data preprocessing
-Creates the training dataset of (dialogue → structured note) pairs using a large LLM to augment the data. Created structured note is created based on the `full_note` column of the [original dataset](https://huggingface.co/datasets/AGBonnet/augmented-clinical-notes).
+Creates the dataset of (dialogue → structured note) pairs using a large LLM to augment the data. The structured note is created based on the `full_note` column of the [original dataset](https://huggingface.co/datasets/AGBonnet/augmented-clinical-notes) (about 30,000 rows).
 
 ```bash
-sbatch run_data_mod_vllm.sh openai/gpt-oss-120b structured_notes.json 256
+sbatch run_data_mod_vllm.sh <model> <out_name> <batch_size> [max_rows]
+
+sbatch run_data_mod_vllm.sh openai/gpt-oss-120b structured_notes 256 
 ```
 Script arguments explained:
 * openai/gpt-oss-120b - LLM used to augment the dataset
-* structured_notes.json - JSON file name (used in finetuning codes)
+* structured_notes - name of the output directory under `/scratch/<project>/<user>/data/` (used by the later steps)
 * 256 - batch size (how many queries sent to vLLM server at once)
 
+The script first saves all rows to `structured_notes_full.jsonl`. It then drops rows where the LLM returned an empty note and splits the rest randomly into train (80 %), validation (10 %) and test (10 %) with a fixed seed (42), so the split is always the same. The split is done only here; the later steps read these files. The column names and split sizes are printed to the log and saved to `dataset_info.json`.
+
 ### 2. Fine-tuning
-Fine-tunes MedGemma-1.5-4B using PEFT on 8 GPUs.
+Fine-tunes MedGemma-1.5-4B using PEFT on 8 GPUs, using `train.jsonl` for training and `validation.jsonl` for evaluation during training. The test split is not used in this step.
 
 ```bash
 sbatch run_finetune_8gpus.sh
@@ -55,87 +87,80 @@ This will open a shell on the compute node where the job is running. We can now 
 <details>
   <summary>example_output.log</summary>
 
-Here is (part of) the slurm output log from succeded training run. 
+Here is the slurm output log from a succeeded training run. 
 ````
-Job started at ke 10.6.2026 18.59.54 +0300
+Job started at to 1.10.2026 09.00.22 +0300
 Running on node: nid007960
-Job ID: 19154866
-MLflow tracking URI: /scratch/project_462000131/demo/ft_model/mlruns
+Job ID: 22466569
+MLflow tracking URI: /scratch/project_462000131/hintsala/data/mlruns
 MLflow Experiment name: medgemma-1.5-4b-itstructured-note-finetuned
 Using 8 GPUs
-Output dir: /scratch/project_462000131/demo/ft_model/medgemma-1.5-4b-it-structured_note
+Output dir: /scratch/project_462000131/hintsala/data/models/medgemma-1.5-4b-it-structured_note
 Using GPU 0: AMD Instinct MI250X
 Loading model: google/medgemma-1.5-4b-it
 Using LoRA (PEFT)
 trainable params: 38,497,792 || all params: 4,338,577,264 || trainable%: 0.8873
-Loading model took: 32.36s
-Loading datasets...
-  Train: /scratch/project_462000131/data/structured_notes.json
-  Train size: 27000
+Loading model took: 188.62s
+Loading datasets from: /scratch/project_462000131/hintsala/data/structured_notes
+  Columns:    ['idx', 'conversation', 'structured_note', 'full_note']
+  Train size: 24000
   Val size:   3000
-  Train tokenized: 26830 samples (from 27000, skipped 170)
-  Val tokenized:   2985 samples (from 3000, skipped 15)
-Tokenized train size: 26830
-Tokenized val size:   2985
-Val dataset saved to: /scratch/project_462000131/data/val_dataset.json
+  Train tokenized: 23852 samples (from 24000, skipped 148)
+  Val tokenized:   2978 samples (from 3000, skipped 22)
 Training starting...
-{'loss': 1.5457, 'grad_norm': 0.3182925283908844, 'learning_rate': 1.9409660107334526e-05, 'epoch': 0.02981514609421586}
-{'loss': 1.2424, 'grad_norm': 0.33986878395080566, 'learning_rate': 1.881335718545021e-05, 'epoch': 0.05963029218843172}
-{'loss': 1.1935, 'grad_norm': 0.3536140024662018, 'learning_rate': 1.8217054263565892e-05, 'epoch': 0.08944543828264759}
-{'loss': 1.1698, 'grad_norm': 0.5306793451309204, 'learning_rate': 1.7620751341681576e-05, 'epoch': 0.11926058437686345}
-{'loss': 1.1415, 'grad_norm': 0.4296364188194275, 'learning_rate': 1.702444841979726e-05, 'epoch': 0.1490757304710793}
-{'loss': 1.1258, 'grad_norm': 0.44555070996284485, 'learning_rate': 1.6428145497912942e-05, 'epoch': 0.17889087656529518}
-{'loss': 1.1148, 'grad_norm': 0.43608298897743225, 'learning_rate': 1.5831842576028623e-05, 'epoch': 0.20870602265951102}
-{'loss': 1.1004, 'grad_norm': 0.47608131170272827, 'learning_rate': 1.5235539654144307e-05, 'epoch': 0.2385211687537269}
-{'loss': 1.1073, 'grad_norm': 0.4293484687805176, 'learning_rate': 1.4639236732259989e-05, 'epoch': 0.26833631484794274}
-{'loss': 1.0961, 'grad_norm': 0.4295450747013092, 'learning_rate': 1.4042933810375671e-05, 'epoch': 0.2981514609421586}
-{'eval_loss': 1.0912601947784424, 'eval_runtime': 112.9733, 'eval_samples_per_second': 26.422, 'eval_steps_per_second': 3.311, 'epoch': 0.2981514609421586}
-{'loss': 1.0905, 'grad_norm': 0.5018987059593201, 'learning_rate': 1.3446630888491354e-05, 'epoch': 0.3279666070363745}
-{'loss': 1.0672, 'grad_norm': 0.46132710576057434, 'learning_rate': 1.2850327966607037e-05, 'epoch': 0.35778175313059035}
-{'loss': 1.0707, 'grad_norm': 0.494373083114624, 'learning_rate': 1.225402504472272e-05, 'epoch': 0.3875968992248062}
-{'loss': 1.0826, 'grad_norm': 0.5018445253372192, 'learning_rate': 1.1657722122838402e-05, 'epoch': 0.41741204531902204}
-{'loss': 1.059, 'grad_norm': 0.5192534327507019, 'learning_rate': 1.1061419200954087e-05, 'epoch': 0.4472271914132379}
-{'loss': 1.062, 'grad_norm': 0.5206125378608704, 'learning_rate': 1.046511627906977e-05, 'epoch': 0.4770423375074538}
-{'loss': 1.0607, 'grad_norm': 0.510175347328186, 'learning_rate': 9.86881335718545e-06, 'epoch': 0.5068574836016696}
-{'loss': 1.0493, 'grad_norm': 0.5446339249610901, 'learning_rate': 9.272510435301133e-06, 'epoch': 0.5366726296958855}
-{'loss': 1.0592, 'grad_norm': 0.5435701608657837, 'learning_rate': 8.676207513416816e-06, 'epoch': 0.5664877757901013}
-{'loss': 1.059, 'grad_norm': 0.5825333595275879, 'learning_rate': 8.079904591532499e-06, 'epoch': 0.5963029218843172}
-{'eval_loss': 1.058499813079834, 'eval_runtime': 113.0612, 'eval_samples_per_second': 26.402, 'eval_steps_per_second': 3.308, 'epoch': 0.5963029218843172}
-{'loss': 1.0588, 'grad_norm': 0.537396252155304, 'learning_rate': 7.483601669648182e-06, 'epoch': 0.6261180679785331}
-{'loss': 1.0613, 'grad_norm': 0.5493167042732239, 'learning_rate': 6.887298747763864e-06, 'epoch': 0.655933214072749}
-{'loss': 1.0637, 'grad_norm': 0.5460458397865295, 'learning_rate': 6.290995825879548e-06, 'epoch': 0.6857483601669648}
-{'loss': 1.0662, 'grad_norm': 0.5493756532669067, 'learning_rate': 5.694692903995231e-06, 'epoch': 0.7155635062611807}
-{'loss': 1.0457, 'grad_norm': 0.5400915145874023, 'learning_rate': 5.098389982110913e-06, 'epoch': 0.7453786523553966}
-{'loss': 1.0414, 'grad_norm': 0.5336266756057739, 'learning_rate': 4.502087060226595e-06, 'epoch': 0.7751937984496124}
-{'loss': 1.0551, 'grad_norm': 0.5538650751113892, 'learning_rate': 3.905784138342278e-06, 'epoch': 0.8050089445438283}
-{'loss': 1.052, 'grad_norm': 0.8979543447494507, 'learning_rate': 3.309481216457961e-06, 'epoch': 0.8348240906380441}
-{'loss': 1.041, 'grad_norm': 0.5568894743919373, 'learning_rate': 2.7131782945736433e-06, 'epoch': 0.86463923673226}
-{'loss': 1.0534, 'grad_norm': 0.5635836720466614, 'learning_rate': 2.1168753726893265e-06, 'epoch': 0.8944543828264758}
-{'eval_loss': 1.047757625579834, 'eval_runtime': 115.6403, 'eval_samples_per_second': 25.813, 'eval_steps_per_second': 3.234, 'epoch': 0.8944543828264758}
-{'loss': 1.0562, 'grad_norm': 0.5930586457252502, 'learning_rate': 1.520572450805009e-06, 'epoch': 0.9242695289206917}
-{'loss': 1.0369, 'grad_norm': 0.5996881723403931, 'learning_rate': 9.242695289206919e-07, 'epoch': 0.9540846750149076}
-{'loss': 1.048, 'grad_norm': 0.5297402143478394, 'learning_rate': 3.2796660703637447e-07, 'epoch': 0.9838998211091234}
-{'train_runtime': 2904.556, 'train_samples_per_second': 9.237, 'train_steps_per_second': 1.155, 'train_loss': 1.0951672965170873, 'epoch': 1.0}
-Training took: 0h 48m 46s
+{'loss': '3.345', 'grad_norm': '0.7818', 'learning_rate': '1.934e-05', 'epoch': '0.03353'}
+{'loss': '1.972', 'grad_norm': '0.7662', 'learning_rate': '1.867e-05', 'epoch': '0.06707'}
+{'loss': '1.625', 'grad_norm': '0.7767', 'learning_rate': '1.799e-05', 'epoch': '0.1006'}
+{'loss': '1.48', 'grad_norm': '0.7587', 'learning_rate': '1.732e-05', 'epoch': '0.1341'}
+{'loss': '1.399', 'grad_norm': '0.7848', 'learning_rate': '1.665e-05', 'epoch': '0.1677'}
+{'loss': '1.347', 'grad_norm': '0.7069', 'learning_rate': '1.598e-05', 'epoch': '0.2012'}
+{'loss': '1.314', 'grad_norm': '0.7304', 'learning_rate': '1.531e-05', 'epoch': '0.2347'}
+{'loss': '1.294', 'grad_norm': '0.7741', 'learning_rate': '1.464e-05', 'epoch': '0.2683'}
+{'loss': '1.276', 'grad_norm': '0.7553', 'learning_rate': '1.397e-05', 'epoch': '0.3018'}
+{'loss': '1.251', 'grad_norm': '0.6914', 'learning_rate': '1.33e-05', 'epoch': '0.3353'}
+{'eval_loss': '1.248', 'eval_runtime': '106.1', 'eval_samples_per_second': '28.08', 'eval_steps_per_second': '3.517', 'epoch': '0.3353'}
+{'loss': '1.242', 'grad_norm': '0.6755', 'learning_rate': '1.263e-05', 'epoch': '0.3689'}
+{'loss': '1.212', 'grad_norm': '0.7111', 'learning_rate': '1.196e-05', 'epoch': '0.4024'}
+{'loss': '1.205', 'grad_norm': '0.723', 'learning_rate': '1.129e-05', 'epoch': '0.4359'}
+{'loss': '1.193', 'grad_norm': '0.7246', 'learning_rate': '1.062e-05', 'epoch': '0.4695'}
+{'loss': '1.206', 'grad_norm': '0.7006', 'learning_rate': '9.946e-06', 'epoch': '0.503'}
+{'loss': '1.181', 'grad_norm': '0.6648', 'learning_rate': '9.276e-06', 'epoch': '0.5366'}
+{'loss': '1.196', 'grad_norm': '0.7537', 'learning_rate': '8.605e-06', 'epoch': '0.5701'}
+{'loss': '1.181', 'grad_norm': '0.7243', 'learning_rate': '7.934e-06', 'epoch': '0.6036'}
+{'loss': '1.182', 'grad_norm': '0.6354', 'learning_rate': '7.264e-06', 'epoch': '0.6372'}
+{'loss': '1.179', 'grad_norm': '0.7169', 'learning_rate': '6.593e-06', 'epoch': '0.6707'}
+{'eval_loss': '1.176', 'eval_runtime': '105.7', 'eval_samples_per_second': '28.17', 'eval_steps_per_second': '3.528', 'epoch': '0.6707'}
+{'loss': '1.168', 'grad_norm': '0.7215', 'learning_rate': '5.922e-06', 'epoch': '0.7042'}
+{'loss': '1.166', 'grad_norm': '0.7673', 'learning_rate': '5.252e-06', 'epoch': '0.7378'}
+{'loss': '1.176', 'grad_norm': '0.7375', 'learning_rate': '4.581e-06', 'epoch': '0.7713'}
+{'loss': '1.161', 'grad_norm': '0.6624', 'learning_rate': '3.91e-06', 'epoch': '0.8048'}
+{'loss': '1.155', 'grad_norm': '0.6465', 'learning_rate': '3.239e-06', 'epoch': '0.8384'}
+{'loss': '1.155', 'grad_norm': '0.787', 'learning_rate': '2.569e-06', 'epoch': '0.8719'}
+{'loss': '1.159', 'grad_norm': '0.6947', 'learning_rate': '1.898e-06', 'epoch': '0.9054'}
+{'loss': '1.152', 'grad_norm': '0.7775', 'learning_rate': '1.227e-06', 'epoch': '0.939'}
+{'loss': '1.162', 'grad_norm': '0.7237', 'learning_rate': '5.567e-07', 'epoch': '0.9725'}
+{'eval_loss': '1.16', 'eval_runtime': '105.8', 'eval_samples_per_second': '28.15', 'eval_steps_per_second': '3.526', 'epoch': '1'}
+{'train_runtime': '2609', 'train_samples_per_second': '9.141', 'train_steps_per_second': '1.143', 'train_loss': '1.331', 'epoch': '1'}
+Training took: 0h 43m 50s
 
-Model saved to: /scratch/project_462001520/demo/ft_model/medgemma-1.5-4b-it-structured_note
-MLflow data:    /scratch/project_462001520/demo/ft_model/mlruns
+Model saved to: /scratch/project_462000131/hintsala/data/models/medgemma-1.5-4b-it-structured_note
+MLflow data:    /scratch/project_462000131/hintsala/data/mlruns
 Merged model saved successfully.
-[ke 10.6.2026 19.59.57 +0300] Cleaning up local cache at /tmp/hf_cache_19154866
+[to 1.10.2026 09.50.33 +0300] Cleaning up MIOpen cache at /tmp/hintsala-miopen-cache-22466569
 ````
 
 </details>
 
 
 ### 3. Inference
-Generates predictions on the validation set (3,000 samples) for three models: MedGemma-1.5-4B original, MedGemma-1.5-4B fine-tuned, and MedGemma-27B original. Results are saved to a JSON file.
+Generates predictions on the test split (`test.jsonl`, about 3,000 samples) for three models: MedGemma-1.5-4B original, MedGemma-1.5-4B fine-tuned, and MedGemma-27B original. The test split was not used in fine-tuning, so the comparison measures performance on unseen examples. Results are saved to `/scratch/<project>/<user>/data/predictions/`.
 
 ```bash
 sbatch run_create_predictions.sh
 ```
 
 ### 4. Evaluation
-Computes BLEU, ROUGE-L, and BERTScore against reference answers using the predictions JSON from the previous step.
+Computes BLEU, ROUGE-L, and BERTScore against reference answers, using the newest predictions file from the previous step. Metrics and plots are saved to `/scratch/<project>/<user>/data/metrics/`. On the first run, the script creates a `venv` with the metric packages; if it breaks later, delete the `venv` directory and it will be created again.
 
 ```bash
 sbatch run_calculate_metrics.sh
