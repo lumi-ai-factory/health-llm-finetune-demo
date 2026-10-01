@@ -9,7 +9,12 @@ import torch
 from vllm import LLM, SamplingParams
 
 
-OUTPUT_DIR      = "/scratch/project_462001520/demo/inference" 
+# All data files live under the user's data directory
+PROJECT         = os.environ.get("SLURM_JOB_ACCOUNT")
+USER            = os.environ.get("USER")
+DATA_ROOT       = f"/scratch/{PROJECT}/{USER}/data"
+OUTPUT_DIR      = f"{DATA_ROOT}/predictions"
+TEST_DATA       = f"{DATA_ROOT}/structured_notes/test.jsonl"
 TENSOR_PARALLEL = 4
 
 
@@ -32,7 +37,7 @@ SAMPLING = dict(temperature=0.5, max_tokens=1024)
 
 # Helper functions
 
-def load_json(filepath: str) -> list:
+def load_jsonl(filepath: str) -> list:
     with open(filepath, encoding="utf-8") as f:
         data = [json.loads(line) for line in f if line.strip()]
     print(f"  Loaded {len(data)} examples from {filepath}")
@@ -47,14 +52,14 @@ def save_json(data, filepath: str) -> None:
 
 
 def build_messages(example: dict) -> list[dict]:
-    """Build chat messages from a val example."""
+    """Build chat messages from a test example."""
     return [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user",   "content": example["conversation"]},
     ]
 
 
-def run_inference(model_path: str, val_data: list[dict],
+def run_inference(model_path: str, test_data: list[dict],
                   tensor_parallel: int) -> list[str]:
     """Load one model, generate predictions, free GPU memory, return texts."""
     print(f"\n  Loading: {model_path}")
@@ -66,7 +71,7 @@ def run_inference(model_path: str, val_data: list[dict],
     )
     print(f"  Model loaded in {round(time.time() - t0, 1)}s")
 
-    all_messages    = [build_messages(ex) for ex in val_data]
+    all_messages    = [build_messages(ex) for ex in test_data]
     sampling_params = SamplingParams(**SAMPLING)
 
     print(f"  Running inference on {len(all_messages)} samples...")
@@ -86,7 +91,7 @@ def run_inference(model_path: str, val_data: list[dict],
 
 
 def merge_predictions(
-    val_data:       list[dict],
+    test_data:      list[dict],
     base_4b_preds:  list[str],
     ft_preds:       list[str],
     base_27b_preds: list[str],
@@ -95,8 +100,9 @@ def merge_predictions(
     One record per example: original fields first, then three prediction fields.
     """
     records = []
-    for example, b4b, ft, b27b in zip(val_data, base_4b_preds, ft_preds, base_27b_preds):
+    for example, b4b, ft, b27b in zip(test_data, base_4b_preds, ft_preds, base_27b_preds):
         record = {
+            "idx":               example.get("idx"),
             "conversation":      example["conversation"],
             "reference":         example["structured_note"],
             "base_4b_response":  b4b,
@@ -121,8 +127,8 @@ def main() -> None:
                         help="HF ID or local path for the 27B base model")
     parser.add_argument("--finetuned-model", required=True,
                         help="Local path to the merged finetuned model directory")
-    parser.add_argument("--val-data",        required=True,
-                        help="Path to val_dataset.json produced by finetune SLURM job")
+    parser.add_argument("--test-data",       default=TEST_DATA,
+                        help="Path to test.jsonl produced by data_mod.py")
     parser.add_argument("--output-dir",      default=OUTPUT_DIR)
     parser.add_argument("--tensor-parallel", type=int, default=TENSOR_PARALLEL)
     args = parser.parse_args()
@@ -134,36 +140,36 @@ def main() -> None:
     print(f"4B base model:    {args.base_model_4b}")
     print(f"27B base model:   {args.base_model_27b}")
     print(f"Finetuned model:  {args.finetuned_model}")
-    print(f"Val data:         {args.val_data}")
+    print(f"Test data:        {args.test_data}")
     print(f"Output dir:       {args.output_dir}")
     print(f"Tensor parallel:  {args.tensor_parallel}")
     print(f"{'=' * 60}\n")
 
-    # ── Load val data (CPU, before any GPU work) ───────────────────────────
-    print("Loading val data...")
-    val_data = load_json(args.val_data)
+    # ── Load test data (CPU, before any GPU work) ──────────────────────────
+    print("Loading test data...")
+    test_data = load_jsonl(args.test_data)
 
     # ── MODEL 1: 4B BASE ───────────────────────────────────────────────────
     print(f"\n{'=' * 60}")
     print(f"MODEL 1 — 4B BASE: {args.base_model_4b}")
     print(f"{'=' * 60}")
-    base_4b_preds = run_inference(args.base_model_4b, val_data, args.tensor_parallel)
+    base_4b_preds = run_inference(args.base_model_4b, test_data, args.tensor_parallel)
 
     # ── MODEL 2: 27B BASE ──────────────────────────────────────────────────
     print(f"\n{'=' * 60}")
     print(f"MODEL 2 — 27B BASE: {args.base_model_27b}")
     print(f"{'=' * 60}")
-    base_27b_preds = run_inference(args.base_model_27b, val_data, args.tensor_parallel)
+    base_27b_preds = run_inference(args.base_model_27b, test_data, args.tensor_parallel)
 
     # ── MODEL 3: FINETUNED ─────────────────────────────────────────────────
     print(f"\n{'=' * 60}")
     print(f"MODEL 3 — FINETUNED: {args.finetuned_model}")
     print(f"{'=' * 60}")
-    ft_preds = run_inference(args.finetuned_model, val_data, args.tensor_parallel)
+    ft_preds = run_inference(args.finetuned_model, test_data, args.tensor_parallel)
 
     # ── Merge and save predictions ─────────────────────────────────────────
     print(f"\nMerging predictions...")
-    records = merge_predictions(val_data, base_4b_preds, ft_preds, base_27b_preds)
+    records = merge_predictions(test_data, base_4b_preds, ft_preds, base_27b_preds)
 
     out_path = os.path.join(
         args.output_dir,
@@ -187,8 +193,8 @@ def main() -> None:
         "base_model_4b":    args.base_model_4b,
         "base_model_27b":   args.base_model_27b,
         "finetuned_model":  args.finetuned_model,
-        "val_data":         args.val_data,
-        "val_size":         len(val_data),
+        "test_data":        args.test_data,
+        "test_size":        len(test_data),
         "tensor_parallel":  args.tensor_parallel,
         "sampling":         SAMPLING,
         "predictions_file": out_path,
