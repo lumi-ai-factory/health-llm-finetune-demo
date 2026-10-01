@@ -6,8 +6,7 @@ import torch
 import mlflow
 import pandas as pd
 
-from pathlib import Path
-from datasets import Dataset #load_from_disk
+from datasets import Dataset
 from peft import LoraConfig, get_peft_model
 from transformers import (
     AutoModelForCausalLM,
@@ -18,6 +17,7 @@ from transformers import (
     AutoProcessor
 )
 from functools import partial
+
 
 def preprocess(examples, tokenizer, max_tokens=2048):
     """
@@ -136,14 +136,24 @@ FOLLOW-UP PLAN:
         "labels": labels_list,
     }
 
+def load_split(data_dir: str, split: str) -> Dataset:
+    """Load one split (JSON Lines) created by data_mod.py."""
+    path = os.path.join(data_dir, f"{split}.jsonl")
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"{path} not found. Run data_mod.py first.")
+    # dtype=False keeps every value exactly as written by data_mod.py
+    df = pd.read_json(path, lines=True, dtype=False)
+    return Dataset.from_pandas(df, preserve_index=False)
+
+    
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--input-model", type=str, default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument("--output-path", type=str, required=True)
     parser.add_argument("--model_output_name", type=str, required=True)
-    parser.add_argument("--json-file", type=str, required=True, help="Path to train JSON file")
-    parser.add_argument("--val-json-output", type=str, default=None, help="Path to save val dataset as JSON")
+    parser.add_argument("--data-dir", type=str, required=True,
+                        help="Directory with train.jsonl and validation.jsonl created by data_mod.py")
     parser.add_argument("--mlflow_tracking_uri", type=str, required=True)
     parser.add_argument("--mlflow_experiment", type=str, required=True)
     parser.add_argument("--batch_size", "-b", type=int, default=1)
@@ -160,14 +170,14 @@ if __name__ == "__main__":
     world_size      = int(os.environ["WORLD_SIZE"])
     local_world_size = int(os.environ["LOCAL_WORLD_SIZE"])
 
+
+    mlflow_tracking_uri = args.mlflow_tracking_uri
     if rank == 0:
-        #mlflow_tracking_uri = os.path.join(args.output_path, "mlruns")
-        mlflow_tracking_uri = args.mlflow_tracking_uri
         mlflow.set_tracking_uri(mlflow_tracking_uri)
-        #mlflow.set_experiment(args.model_output_name)
         mlflow.set_experiment(args.mlflow_experiment)
         print(f"MLflow tracking URI: {mlflow_tracking_uri}")
         print(f"MLflow Experiment name: {args.mlflow_experiment}")
+
 
     output_model_dir = os.path.join(args.output_path, args.model_output_name)
 
@@ -206,7 +216,7 @@ if __name__ == "__main__":
 
     model = AutoModelForCausalLM.from_pretrained(
         args.input_model,
-        torch_dtype=torch.bfloat16,
+        dtype=torch.bfloat16,
         device_map=device,
     )
 
@@ -229,23 +239,21 @@ if __name__ == "__main__":
         print(f"Loading model took: {stop - start:.2f}s")
 
     # ── Load and tokenize datasets ────────────────────────────
+    # The train/validation/test split is created once by data_mod.py.
+    # The test split is not used here; it is reserved for create_predictions.py.
+
 
     if rank == 0:
-        print(f"Loading datasets...")
-        print(f"  Train: {args.json_file}")
+        print(f"Loading datasets from: {args.data_dir}")
 
-    df = pd.read_json(args.json_file)
-
-    dataset = Dataset.from_pandas(df, preserve_index=False)
-
-    split = dataset.train_test_split(test_size=0.1, seed=42)
-
-    raw_train = split["train"]
-    raw_val = split["test"]
+    raw_train = load_split(args.data_dir, "train")
+    raw_val = load_split(args.data_dir, "validation")
 
     if rank == 0:
+        print(f"  Columns:    {raw_train.column_names}")
         print(f"  Train size: {len(raw_train)}")
         print(f"  Val size:   {len(raw_val)}")
+
 
     preprocess_fn = partial(preprocess, tokenizer=tokenizer, max_tokens=args.max_tokens)
 
@@ -270,17 +278,6 @@ if __name__ == "__main__":
     if rank == 0:
             print(f"  Val tokenized:   {len(tokenized_val)} samples "
                   f"(from {len(raw_val)}, skipped {len(raw_val) - len(tokenized_val)})")
-
-    if rank == 0:
-        tokenized_val.save_to_disk(f"{Path(args.json_file).parent / 'tokenized_val'}")
-        raw_val.save_to_disk(f"{Path(args.json_file).parent / 'raw_val'}")
-        print(f"Tokenized train size: {len(tokenized_train)}")
-        print(f"Tokenized val size:   {len(tokenized_val)}")
-
-        # Save raw_val as JSON to a custom path
-        if args.val_json_output:
-            raw_val.to_json(args.val_json_output)
-            print(f"Val dataset saved to: {args.val_json_output}")
 
     # ── Training arguments ────────────────────────────────────
 
@@ -324,7 +321,7 @@ if __name__ == "__main__":
         args=training_args,
         train_dataset=tokenized_train,
         eval_dataset=tokenized_val,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=data_collator,
     )
 
